@@ -7,6 +7,7 @@ import logging
 import argparse
 import os
 import tempfile
+import shutil
 import sys
 import subprocess
 import re
@@ -100,7 +101,19 @@ def process_nrrd(src_dir, dst_dir, protocol_dir, log_dir, nrrd_file):
     if not os.path.isfile(os.path.join(protocol_dir, protocol_file)):
         logger.error('Protocol file not found for tag:{}. A default protocol dtiprep_protocol.xml can be used.'.format(
             nrrd_file[1]))
-    make_job(src_dir, dst_dir, protocol_dir, log_dir, scan, protocol_file)
+
+    nrrd_path = os.path.join(nrrd_file[0])
+    if os.path.islink(nrrd_path):
+        real_path = os.path.realpath(nrrd_path)
+        if not os.path.exists(real_path):
+            logger.error('Link: {} is broken, skipping'.format(nrrd_file[0]))
+            return
+        temp_dir = tempfile.mkdtemp()
+        shutil.copyfile(real_path, os.path.join(temp_dir, nrrd_file[0]))
+        make_job(temp_dir, dst_dir, protocol_dir, log_dir, scan, protocol_file)
+        shutil.rmtree(temp_dir)
+    else:
+        make_job(src_dir, dst_dir, protocol_dir, log_dir, scan, protocol_file)
 
 
 def convert_nii(dst_dir, log_dir):
@@ -121,7 +134,7 @@ def convert_nii(dst_dir, log_dir):
                 d=dst_dir, nrrd=nrrd_file, nii=nii_file, bvec=bvec_file, bval=bval_file)
             rtn, msg = datman.utils.run(cmd, verbose=False)
 
-            # only report errors for actual diffusion-weighted data with directions 
+            # only report errors for actual diffusion-weighted data with directions
             # since DWIConvert is noisy when converting non-diffusion data from nrrd
             # we assume if this conversion is broken then all other conversion must be
             # suspect as well -- jdv
@@ -226,4 +239,3 @@ if __name__ == '__main__':
 
     for session in sessions:
         process_session(nrrd_path, args.outDir, meta_path, args.logDir, session, tags=args.tags)
-
