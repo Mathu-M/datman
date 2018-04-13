@@ -11,8 +11,9 @@ import shutil
 import sys
 import subprocess
 import re
+import time
 
-CONTAINER = '/archive/code/containers/DTIPREP/dtiprep.img'
+CONTAINER = '/scratch/mmanogaran/DTIPrep_container/dtiprep.img'
 
 JOB_TEMPLATE = """
 #####################################
@@ -64,23 +65,30 @@ class QJob(object):
 
 def make_job(src_dir, dst_dir, protocol_dir, log_dir, scan_name, protocol_file=None, cleanup=True):
     # create a job file from template and use qsub to submit
-    code = ("singularity run -B {src_dir}:/input -B {dst_dir}:/output -B {protocol_dir}:/meta {container} {scan_name}"
-            .format(src_dir=src_dir,
-                    dst_dir=dst_dir,
-                    protocol_dir=protocol_dir,
+    code = (
+    "singularity run -B {src}:/input -B {dst}:/output -B {protocol}:/meta -B {log}:/logs {container} {scan_name}"
+            .format(src=src_dir,
+                    dst=dst_dir,
+                    log=log_dir,
+                    protocol=protocol_dir,
                     container=CONTAINER,
                     scan_name=scan_name))
 
     if protocol_file:
         code = code + ' --protocolFile={protocol_file}'.format(protocol_file=protocol_file)
 
-    with QJob() as qjob:
-        #logfile = '{}:/tmp/output.$JOB_ID'.format(socket.gethostname())
-        #errfile = '{}:/tmp/error.$JOB_ID'.format(socket.gethostname())
-        logfile = os.path.join(log_dir, 'output.$JOB_ID')
-        errfile = os.path.join(log_dir, 'error.$JOB_ID')
-        logger.info('Making job DTIPrep for scan:{}'.format(scan_name))
-        qjob.run(code=code, logfile=logfile, errfile=errfile)
+    print code
+
+    os.system(code)
+
+
+    # with QJob() as qjob:
+    #     #logfile = '{}:/tmp/output.$JOB_ID'.format(socket.gethostname())
+    #     #errfile = '{}:/tmp/error.$JOB_ID'.format(socket.gethostname())
+    #     logfile = os.path.join(log_dir, 'output.$JOB_ID')
+    #     errfile = os.path.join(log_dir, 'error.$JOB_ID')
+    #     logger.info('Making job DTIPrep for scan:{}'.format(scan_name))
+    #     qjob.run(code=code, logfile=logfile, errfile=errfile)
 
 
 def process_nrrd(src_dir, dst_dir, protocol_dir, log_dir, nrrd_file):
@@ -102,7 +110,7 @@ def process_nrrd(src_dir, dst_dir, protocol_dir, log_dir, nrrd_file):
         logger.error('Protocol file not found for tag:{}. A default protocol dtiprep_protocol.xml can be used.'.format(
             nrrd_file[1]))
 
-    nrrd_path = os.path.join(nrrd_file[0])
+    nrrd_path = os.path.join(src_dir, nrrd_file[0])
     if os.path.islink(nrrd_path):
         real_path = os.path.realpath(nrrd_path)
         if not os.path.exists(real_path):
@@ -183,7 +191,34 @@ def process_session(src_dir, out_dir, protocol_dir, log_dir, session, **kwargs):
     # convert output nrrd files to nifti
     convert_nii(out_dir, log_dir)
 
-if __name__ == '__main__':
+def create_command(session, args):
+    study = args.study
+    session = ' --session {}'.format(session)
+    out_dir = ' --outDir {}'.format(args.outDir) if args.outDir else ''
+    log_dir = ' --logDir {}'.format(args.logDir) if args.logDir else ''
+    tags = ''
+    if args.tags:
+        for tag in args.tags:
+            tags +=' --tag {}'.format(tag)
+    quiet = ' --quiet'.format(args.quiet) if args.quiet else ''
+    verbose = ' --verbose'.format(args.verbose) if args.verbose else ''
+
+    options = ''.join([session, out_dir, log_dir, tags, quiet, verbose])
+    cmd = "{} {} {}".format(__file__, options, study)
+    return cmd
+
+def submit_proc_dtiprep(sessions, args, cfg):
+    with datman.utils.cd(args.outDir):
+        for i, session in enumerate(sessions):
+            cmd = create_command(session, args)
+            logger.info("Queueing command: {}".format(cmd))
+            job_name = 'dm_proc_dtiprep_{}_{}'.format(i, time.strftime("%Y%m%d-%H%M%S"))
+            os.system(cmd)
+            # datman.utils.submit_job(cmd, job_name, log_dir = args.logDir,
+            #     system = cfg.system, cpu_cores=1,
+            #     walltime='23:00:00', dryrun = False)
+
+def main():
     parser = argparse.ArgumentParser("Run DTIPrep on a DTI File")
     parser.add_argument("study", help="Study")
     parser.add_argument("--session", dest="session", help="Session identifier")
@@ -234,8 +269,19 @@ if __name__ == '__main__':
 
     if not args.session:
         sessions = [d for d in os.listdir(nrrd_path) if os.path.isdir(os.path.join(nrrd_path, d))]
+        submit_proc_dtiprep(sessions, args, cfg)
     else:
-        sessions = [args.session]
+        process_session(nrrd_path, args.outDir, meta_path, args.logDir, args.session, tags=args.tags)
 
-    for session in sessions:
-        process_session(nrrd_path, args.outDir, meta_path, args.logDir, session, tags=args.tags)
+    #
+    #
+    # if not args.session:
+    #     sessions = [d for d in os.listdir(nrrd_path) if os.path.isdir(os.path.join(nrrd_path, d))]
+    # else:
+    #     sessions = [args.session]
+    #
+    # for session in sessions:
+    #     process_session(nrrd_path, args.outDir, meta_path, args.logDir, session, tags=args.tags)
+
+if __name__ == '__main__':
+    main()
